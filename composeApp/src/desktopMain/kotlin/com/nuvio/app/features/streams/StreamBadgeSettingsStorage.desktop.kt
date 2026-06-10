@@ -14,8 +14,9 @@ internal actual object StreamBadgeSettingsStorage {
     private const val streamBadgeRulesKey = "stream_badge_rules"
     private const val showFileSizeBadgesKey = "show_file_size_badges"
     private const val streamBadgePlacementKey = "stream_badge_placement"
+    private const val showAddonLogoKey = "show_addon_logo"
     private const val legacyDebridStreamBadgeRulesKey = "debrid_stream_badge_rules"
-    private val syncKeys = listOf(streamBadgeRulesKey, showFileSizeBadgesKey, streamBadgePlacementKey)
+    private val syncKeys = listOf(streamBadgeRulesKey, showFileSizeBadgesKey, streamBadgePlacementKey, showAddonLogoKey)
     private val store = DesktopStorage.store("nuvio_stream_badge_settings")
     private val legacyDebridStore = DesktopStorage.store("nuvio_debrid_settings")
 
@@ -25,6 +26,9 @@ internal actual object StreamBadgeSettingsStorage {
     actual fun saveShowFileSizeBadges(enabled: Boolean) = saveBoolean(showFileSizeBadgesKey, enabled)
     actual fun loadStreamBadgePlacement(): String? = loadString(streamBadgePlacementKey)
     actual fun saveStreamBadgePlacement(placement: String) = saveString(streamBadgePlacementKey, placement)
+
+    actual fun loadShowAddonLogo(): Boolean? = loadBoolean(showAddonLogoKey)
+    actual fun saveShowAddonLogo(enabled: Boolean) = saveBoolean(showAddonLogoKey, enabled)
 
     actual fun loadLegacyDebridStreamBadgeRules(): String? =
         legacyDebridStore.getString(ProfileScopedKey.of(legacyDebridStreamBadgeRulesKey))
@@ -42,6 +46,7 @@ internal actual object StreamBadgeSettingsStorage {
         loadStreamBadgeRules()?.let { put(streamBadgeRulesKey, encodeSyncString(it)) }
         loadShowFileSizeBadges()?.let { put(showFileSizeBadgesKey, encodeSyncBoolean(it)) }
         loadStreamBadgePlacement()?.let { put(streamBadgePlacementKey, encodeSyncString(it)) }
+        loadShowAddonLogo()?.let { put(showAddonLogoKey, encodeSyncBoolean(it)) }
     }
 
     actual fun replaceFromSyncPayload(payload: JsonObject) {
@@ -49,5 +54,6 @@ internal actual object StreamBadgeSettingsStorage {
         payload.decodeSyncString(streamBadgeRulesKey)?.let(::saveStreamBadgeRules)
         payload.decodeSyncBoolean(showFileSizeBadgesKey)?.let(::saveShowFileSizeBadges)
         payload.decodeSyncString(streamBadgePlacementKey)?.let(::saveStreamBadgePlacement)
+        payload.decodeSyncBoolean(showAddonLogoKey)?.let(::saveShowAddonLogo)
     }
 }
