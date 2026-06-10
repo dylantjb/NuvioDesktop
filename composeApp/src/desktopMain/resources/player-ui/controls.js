@@ -23,7 +23,6 @@ const subtitlesLabel = document.getElementById("subtitlesLabel");
 const audioLabel = document.getElementById("audioLabel");
 const sourcesLabel = document.getElementById("sourcesLabel");
 const episodesLabel = document.getElementById("episodesLabel");
-const externalLabel = document.getElementById("externalLabel");
 const submitIntroButton = document.getElementById("submitIntroButton");
 const lockButton = document.getElementById("lockButton");
 const videoSettingsButton = document.getElementById("videoSettingsButton");
@@ -55,7 +54,6 @@ const nextEpisodeStatus = document.getElementById("nextEpisodeStatus");
 const nextEpisodeAction = document.getElementById("nextEpisodeAction");
 const sourcesButton = document.getElementById("sourcesButton");
 const episodesButton = document.getElementById("episodesButton");
-const externalButton = document.getElementById("externalButton");
 const lockedLabel = document.getElementById("lockedLabel");
 const audioModal = document.getElementById("audioModal");
 const subtitleModal = document.getElementById("subtitleModal");
@@ -332,11 +330,30 @@ let pauseMetadataEligibilityKey = "";
 let chromeAutoHideTimer = 0;
 let chromeAutoHideKey = "";
 let chromeAutoHideActivity = 0;
+let chromeInteractionLastNotedAt = 0;
+let isChromePointerInside = false;
+let isChromePointerDown = false;
+let isChromeFocusInside = false;
 let nativeViewportTimer = 0;
 const prefersReducedMotion = window.matchMedia &&
   window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 const modalTransitionMs = prefersReducedMotion ? 1 : 240;
 const chromeAutoHideDelayMs = 3500;
+const chromeActivityThrottleMs = 300;
+const chromeInteractionSelector = [
+  "button",
+  "input",
+  "textarea",
+  "select",
+  "[contenteditable='true']",
+  ".header-actions",
+  ".center-controls",
+  ".progress",
+  ".locked-overlay",
+  ".modal-layer",
+  ".skip-prompt",
+  ".next-episode-card",
+].join(",");
 
 const send = (type, value = 0) => {
   const bridge = window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.player;
@@ -1391,10 +1408,6 @@ window.nuvioNativeViewportChanged = () => {
   if (activeModal) renderActiveModal();
 };
 
-window.addEventListener("resize", () => {
-  window.nuvioNativeViewportChanged();
-});
-
 const trackListSignature = tracks =>
   normalizeTracks(tracks)
     .map(track => [
@@ -1517,6 +1530,12 @@ const renderNativePlaybackPrompts = () => {
 const isOpeningOverlayActive = () =>
   Boolean((!hasReceivedPlayerControls || state.showOpeningOverlay) && state.isLoading);
 
+const isChromeInteractionTarget = target =>
+  Boolean(target && target.closest && target.closest(chromeInteractionSelector));
+
+const isInteractingWithChrome = () =>
+  Boolean(isChromePointerInside || isChromePointerDown || isChromeFocusInside);
+
 const canAutoHideChrome = showOpening => Boolean(
   state.controlsVisible &&
   state.isPlaying &&
@@ -1524,6 +1543,7 @@ const canAutoHideChrome = showOpening => Boolean(
   !state.isLocked &&
   !activeModal &&
   !isScrubbing &&
+  !isInteractingWithChrome() &&
   !showOpening,
 );
 
@@ -1537,6 +1557,7 @@ const currentChromeAutoHideKey = showOpening => {
     state.isLocked ? "locked" : "unlocked",
     activeModal || "none",
     isScrubbing ? "scrubbing" : "idle",
+    isInteractingWithChrome() ? "interacting" : "idle-controls",
     showOpening ? "opening" : "ready",
   ].join(":");
 };
@@ -1572,10 +1593,33 @@ const syncChromeAutoHideTimer = showOpening => {
   }, chromeAutoHideDelayMs);
 };
 
-const noteChromeActivity = () => {
+const noteChromeActivity = (force = false) => {
   if (!state.controlsVisible || state.isLocked) return;
+  const now = window.performance ? window.performance.now() : Date.now();
+  if (!force && now - chromeInteractionLastNotedAt < chromeActivityThrottleMs) {
+    syncChromeAutoHideTimer(isOpeningOverlayActive());
+    return;
+  }
+  chromeInteractionLastNotedAt = now;
   chromeAutoHideActivity += 1;
   syncChromeAutoHideTimer(isOpeningOverlayActive());
+};
+
+const updateChromePointerInside = inside => {
+  if (isChromePointerInside === inside) return;
+  isChromePointerInside = inside;
+  noteChromeActivity(true);
+};
+
+const finishChromePointerInteraction = event => {
+  isChromePointerDown = false;
+  if (event && event.type !== "pointercancel") {
+    isChromePointerInside = isChromeInteractionTarget(event.target);
+  } else {
+    isChromePointerInside = false;
+  }
+  clearPressedButton();
+  noteChromeActivity(true);
 };
 
 const renderChrome = () => {
@@ -1600,7 +1644,6 @@ const renderChrome = () => {
   audioLabel.textContent = state.audioLabel || "Audio";
   sourcesLabel.textContent = state.sourcesLabel || "Sources";
   episodesLabel.textContent = state.episodesLabel || "Episodes";
-  externalLabel.textContent = state.externalPlayerLabel || "External";
   lockedLabel.textContent = state.tapToUnlockLabel || "Tap to unlock";
   const showBuffering = Boolean(state.isLoading && !state.isLocked && !activeModal && !showOpening);
   bufferingStatus.classList.toggle("visible", showBuffering);
@@ -1610,7 +1653,6 @@ const renderChrome = () => {
   setVisible(videoSettingsButton, Boolean(state.showVideoSettings));
   setVisible(sourcesButton, Boolean(state.showSources));
   setVisible(episodesButton, Boolean(state.showEpisodes));
-  setVisible(externalButton, Boolean(state.showExternalPlayer));
 
   const playPauseLabel = isPlaying ? state.pauseLabel : state.playLabel;
   if (toggle) {
@@ -1687,9 +1729,17 @@ const clearPressedButton = () => {
 };
 
 document.addEventListener("pointerdown", event => {
+  const interactingWithChrome = isChromeInteractionTarget(event.target);
+  if (interactingWithChrome) {
+    isChromePointerDown = true;
+    isChromePointerInside = true;
+    noteChromeActivity(true);
+  }
   if (!isTextEntryTarget(event.target)) {
     focusShortcutRoot();
-    noteChromeActivity();
+    if (!interactingWithChrome) {
+      noteChromeActivity(true);
+    }
   }
   const button = event.target.closest("button");
   if (!button || button.disabled) return;
@@ -1698,14 +1748,44 @@ document.addEventListener("pointerdown", event => {
   button.classList.add("is-pressed");
 }, true);
 
-document.addEventListener("pointerup", clearPressedButton, true);
-document.addEventListener("pointercancel", clearPressedButton, true);
+document.addEventListener("pointermove", event => {
+  const inside = isChromeInteractionTarget(event.target);
+  updateChromePointerInside(inside);
+  if (inside) {
+    noteChromeActivity();
+  }
+}, true);
+
+document.addEventListener("pointerup", finishChromePointerInteraction, true);
+document.addEventListener("pointercancel", finishChromePointerInteraction, true);
 document.addEventListener("dragend", clearPressedButton, true);
-window.addEventListener("blur", clearPressedButton);
+document.addEventListener("pointerleave", () => {
+  updateChromePointerInside(false);
+}, true);
+document.addEventListener("focusin", event => {
+  isChromeFocusInside = isChromeInteractionTarget(event.target);
+  if (isChromeFocusInside) {
+    noteChromeActivity(true);
+  }
+}, true);
+document.addEventListener("focusout", () => {
+  window.setTimeout(() => {
+    isChromeFocusInside = isChromeInteractionTarget(document.activeElement);
+    noteChromeActivity(true);
+  }, 0);
+}, true);
+window.addEventListener("blur", () => {
+  isChromePointerInside = false;
+  isChromePointerDown = false;
+  isChromeFocusInside = false;
+  clearPressedButton();
+  syncChromeAutoHideTimer(isOpeningOverlayActive());
+});
 
 document.querySelectorAll("[data-command]").forEach(button => {
   button.addEventListener("click", event => {
     event.stopPropagation();
+    noteChromeActivity(true);
     const command = button.dataset.command;
     if (command === "audio") {
       openPlayerModal("audio");
