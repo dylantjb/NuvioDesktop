@@ -28,6 +28,7 @@ internal actual object DebridSettingsStorage {
     private const val streamPreferencesKey = "debrid_stream_preferences"
     private const val streamNameTemplateKey = "debrid_stream_name_template"
     private const val streamDescriptionTemplateKey = "debrid_stream_description_template"
+    private const val pendingDeviceAuthorizationPrefix = "debrid_pending_device_authorization_"
     private val store = DesktopStorage.store("nuvio_debrid_settings")
 
     actual fun loadEnabled(): Boolean? = loadBoolean(enabledKey)
@@ -62,6 +63,14 @@ internal actual object DebridSettingsStorage {
     actual fun saveStreamNameTemplate(template: String) = saveString(streamNameTemplateKey, template)
     actual fun loadStreamDescriptionTemplate(): String? = loadString(streamDescriptionTemplateKey)
     actual fun saveStreamDescriptionTemplate(template: String) = saveString(streamDescriptionTemplateKey, template)
+    actual fun loadPendingDeviceAuthorization(providerId: String): String? =
+        loadString(pendingDeviceAuthorizationKey(providerId))
+
+    actual fun savePendingDeviceAuthorization(providerId: String, payload: String) =
+        saveString(pendingDeviceAuthorizationKey(providerId), payload)
+
+    actual fun clearPendingDeviceAuthorization(providerId: String) =
+        store.remove(ProfileScopedKey.of(pendingDeviceAuthorizationKey(providerId)))
 
     actual fun loadPendingDeviceAuthorization(providerId: String): String? =
         loadString(pendingDeviceAuthKey(providerId))
@@ -148,4 +157,10 @@ internal actual object DebridSettingsStorage {
 
     private fun pendingDeviceAuthKey(providerId: String): String =
         "debrid_${providerId}_pending_device_auth"
+
+    private fun pendingDeviceAuthorizationKey(providerId: String): String {
+        val normalized = DebridProviders.byId(providerId)?.id
+            ?: providerId.trim().lowercase().replace(Regex("[^a-z0-9_]+"), "_")
+        return "$pendingDeviceAuthorizationPrefix$normalized"
+    }
 }
