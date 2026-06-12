@@ -63,6 +63,7 @@ internal actual object DebridSettingsStorage {
     actual fun saveStreamNameTemplate(template: String) = saveString(streamNameTemplateKey, template)
     actual fun loadStreamDescriptionTemplate(): String? = loadString(streamDescriptionTemplateKey)
     actual fun saveStreamDescriptionTemplate(template: String) = saveString(streamDescriptionTemplateKey, template)
+    
     actual fun loadPendingDeviceAuthorization(providerId: String): String? =
         loadString(pendingDeviceAuthorizationKey(providerId))
 
@@ -71,16 +72,6 @@ internal actual object DebridSettingsStorage {
 
     actual fun clearPendingDeviceAuthorization(providerId: String) =
         store.remove(ProfileScopedKey.of(pendingDeviceAuthorizationKey(providerId)))
-
-    actual fun loadPendingDeviceAuthorization(providerId: String): String? =
-        loadString(pendingDeviceAuthKey(providerId))
-
-    actual fun savePendingDeviceAuthorization(providerId: String, payload: String) =
-        saveString(pendingDeviceAuthKey(providerId), payload)
-
-    actual fun clearPendingDeviceAuthorization(providerId: String) {
-        store.remove(ProfileScopedKey.of(pendingDeviceAuthKey(providerId)))
-    }
 
     private fun loadBoolean(key: String): Boolean? = store.getBoolean(ProfileScopedKey.of(key))
     private fun saveBoolean(key: String, value: Boolean) = store.putBoolean(ProfileScopedKey.of(key), value)
@@ -154,9 +145,6 @@ internal actual object DebridSettingsStorage {
             else -> "debrid_${normalized}_api_key"
         }
     }
-
-    private fun pendingDeviceAuthKey(providerId: String): String =
-        "debrid_${providerId}_pending_device_auth"
 
     private fun pendingDeviceAuthorizationKey(providerId: String): String {
         val normalized = DebridProviders.byId(providerId)?.id
