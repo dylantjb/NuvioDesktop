@@ -1,0 +1,41 @@
+name: Windows MSI
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [touch-scroll]
+
+jobs:
+  msi:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+          lfs: true
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: gradle
+
+      - name: Make sure WiX 3 is on PATH
+        shell: pwsh
+        run: |
+          $pf = ${env:ProgramFiles(x86)}
+          $wix = Get-ChildItem $pf -Directory -Filter 'WiX Toolset*' -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $wix) {
+            choco install wixtoolset -y --no-progress
+            $wix = Get-ChildItem $pf -Directory -Filter 'WiX Toolset*' | Select-Object -First 1
+          }
+          Add-Content $env:GITHUB_PATH "$($wix.FullName)\bin"
+
+      - name: Build MSI
+        shell: pwsh
+        run: .\gradlew.bat :composeApp:packageReleaseMsi --rerun-tasks
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nuvio-windows-msi
+          path: composeApp/build/compose/binaries/**/*.msi

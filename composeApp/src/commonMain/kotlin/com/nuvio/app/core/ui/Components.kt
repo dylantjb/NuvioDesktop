@@ -9,6 +9,8 @@ import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -64,16 +66,17 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import com.nuvio.app.isWindows
 import nuvio.composeapp.generated.resources.Res
 import nuvio.composeapp.generated.resources.action_back
 import nuvio.composeapp.generated.resources.action_ok
-import org.jetbrains.compose.resources.stringResource
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import com.nuvio.app.isDesktop
 import com.nuvio.app.navigation.LocalNativeNavigationBarHidden
 import com.nuvio.app.navigation.LocalUseNativeNavigation
+import kotlin.math.abs
 
 @Composable
 fun NuvioScreen(
@@ -88,6 +91,7 @@ fun NuvioScreen(
     Box(
         modifier = modifier
             .fillMaxSize()
+            .nuvioWindowsTouchVerticalDragScroll(listState)
             .background(tokens.colors.background),
     ) {
         LazyColumn(
@@ -109,6 +113,47 @@ fun NuvioScreen(
                 .fillMaxHeight()
                 .padding(vertical = 8.dp, horizontal = 4.dp),
         )
+    }
+}
+
+internal fun Modifier.nuvioWindowsTouchVerticalDragScroll(
+    state: LazyListState,
+): Modifier {
+    if (!isWindows) return this
+
+    return pointerInput(state) {
+        awaitEachGesture {
+            val down = awaitFirstDown(pass = PointerEventPass.Initial)
+            var totalDx = 0f
+            var totalDy = 0f
+            var dragging = false
+
+            while (true) {
+                val event = awaitPointerEvent(pass = PointerEventPass.Initial)
+                val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                if (!change.pressed) break
+
+                val delta = change.position - change.previousPosition
+                totalDx += delta.x
+                totalDy += delta.y
+
+                if (!dragging) {
+                    val horizontalDrag =
+                        abs(totalDx) > viewConfiguration.touchSlop && abs(totalDx) > abs(totalDy)
+                    val verticalDrag =
+                        abs(totalDy) > viewConfiguration.touchSlop && abs(totalDy) > abs(totalDx)
+
+                    when {
+                        horizontalDrag -> break
+                        verticalDrag -> dragging = true
+                        else -> continue
+                    }
+                }
+
+                state.dispatchRawDelta(-delta.y)
+                change.consume()
+            }
+        }
     }
 }
 
