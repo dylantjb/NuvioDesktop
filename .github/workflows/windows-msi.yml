@@ -1,105 +1,87 @@
-name: Windows MSI
+name: Windows Test Build
 
 on:
   push:
     branches: [touch-scroll]
   workflow_dispatch:
-    inputs:
-      mode:
-        description: Build artifacts, validate a release, create a draft, or publish
-        required: true
-        type: choice
-        options:
-          - build-only
-          - dry-run
-          - draft
-          - publish
-        default: dry-run
-      exclude_commits:
-        description: Optional comma-separated commit hashes to omit from the notes
-        required: false
-        type: string
-
-permissions:
-  contents: write
-  pull-requests: read
 
 concurrency:
-  group: desktop-release-${{ github.ref }}
-  cancel-in-progress: false
+  group: windows-test-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  metadata:
-    name: ${{ inputs.mode }} Windows desktop release
-    runs-on: ubuntu-latest
-    outputs:
-      version: ${{ steps.release.outputs.version }}
-      tag: ${{ steps.release.outputs.version }}
-      release_commit: ${{ steps.release.outputs.release_commit }}
-      current_bump: ${{ steps.release.outputs.current_bump }}
-      previous_bump: ${{ steps.release.outputs.previous_bump }}
+  windows-build:
+    name: Build Windows x64
+    runs-on: windows-2022
     env:
-      GH_TOKEN: ${{ github.token }}
+      WEBVIEW2_VERSION: 1.0.4078.44
 
     steps:
-      - name: Check out full history
+      - name: Check out source
         uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
 
-      - name: Read release metadata
-        id: release
-        env:
-          VERSION_FILE: composeApp/Configuration/DesktopVersion.properties
-          VERSION_KEY: VERSION_NAME
-          VERSION_FIRST_PARENT: "true"
-        run: ./scripts/release-metadata.sh "${GITHUB_SHA}" >> "${GITHUB_OUTPUT}"
-
-      - name: Validate release state
-        env:
-          RELEASE_TAG: ${{ steps.release.outputs.version }}
-          CURRENT_BUMP: ${{ steps.release.outputs.current_bump }}
-          RELEASE_COMMIT: ${{ steps.release.outputs.release_commit }}
-          RELEASE_REF_TYPE: ${{ github.ref_type }}
-          RELEASE_MODE: ${{ inputs.mode }}
+      - name: Fetch Windows runtime
+        shell: bash
         run: |
-          if [[ "${RELEASE_REF_TYPE}" != "branch" ]]; then
-            echo "Releases must be dispatched from a branch, not ${RELEASE_REF_TYPE}." >&2
+          git lfs pull --include="composeApp/src/desktopMain/native/windows/runtime/**" --exclude=""
+          runtime_path="composeApp/src/desktopMain/native/windows/runtime/libmpv-2.dll"
+          if [[ ! -f "${runtime_path}" ]]; then
+            echo "The bundled Windows libmpv runtime is missing." >&2
             exit 1
           fi
 
-          if [[ "${RELEASE_MODE}" != "build-only" ]]; then
-            if git rev-parse --verify --quiet "refs/tags/${RELEASE_TAG}"; then
-              echo "Tag ${RELEASE_TAG} already exists." >&2
-              exit 1
-            fi
-            if gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${RELEASE_TAG}" >/dev/null 2>&1; then
-              echo "A GitHub release for ${RELEASE_TAG} already exists." >&2
-              exit 1
-            fi
+      - name: Set up Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 17
 
-            unexpected_changes="$(
-              git diff --name-only "${CURRENT_BUMP}..${RELEASE_COMMIT}" \
-                | grep -Ev '^(\.github/workflows/desktop-release\.yml|scripts/(generate-release-notes|release-metadata)\.sh)$' \
-                || true
-            )"
-            if [[ -n "${unexpected_changes}" ]]; then
-              echo "The desktop version bump must be the final application change before release." >&2
-              echo "Unexpected files changed after the bump:" >&2
-              echo "${unexpected_changes}" >&2
-              exit 1
-            fi
-          fi
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v6
 
-      - name: Generate repository release notes
-        if: inputs.mode != 'build-only'
+      - name: Configure desktop runtime
+        shell: bash
         env:
-          PREVIOUS_BUMP: ${{ steps.release.outputs.previous_bump }}
-          CURRENT_BUMP: ${{ steps.release.outputs.current_bump }}
-          EXCLUDE_COMMITS: ${{ inputs.exclude_commits }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+          TRAKT_CLIENT_ID: ${{ secrets.TRAKT_CLIENT_ID }}
+          TRAKT_CLIENT_SECRET: ${{ secrets.TRAKT_CLIENT_SECRET }}
         run: |
-          ./scripts/generate-release-notes.sh \
-            --from "${PREVIOUS_BUMP}" \
-            --to "${CURRENT_BUMP}" \
-            --repository "${GITHUB_REPOSITORY}" \
-            --repository-hi
+          cat <<EOF > local.properties
+          NUVIO_SUPABASE_URL=${SUPABASE_URL}
+          NUVIO_SUPABASE_ANON_KEY=${SUPABASE_ANON_KEY}
+          TRAKT_CLIENT_ID=${TRAKT_CLIENT_ID}
+          TRAKT_CLIENT_SECRET=${TRAKT_CLIENT_SECRET}
+          EOF
+
+      - name: Install WebView2 SDK
+        shell: pwsh
+        run: |
+          nuget install Microsoft.Web.WebView2 `
+            -Version $env:WEBVIEW2_VERSION `
+            -OutputDirectory "$env:RUNNER_TEMP\nuget" `
+            -DirectDownload `
+            -NonInteractive `
+            -NoCache
+
+          $webView2Root = Join-Path $env:RUNNER_TEMP "nuget\Microsoft.Web.WebView2.$env:WEBVIEW2_VERSION"
+          "WEBVIEW2_ROOT=$webView2Root" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Build MSI
+        shell: pwsh
+        run: |
+          & .\gradlew.bat `
+            :composeApp:packageReleaseMsi `
+            "-Pnuvio.webview2.dir=$env:WEBVIEW2_ROOT" `
+            "-Pcompose.desktop.packaging.checkJdkVendor=false" `
+            --no-configuration-cache `
+            --no-daemon `
+            --stacktrace
+
+      - name: Upload MSI
+        uses: actions/upload-artifact@v7
+        with:
+          name: nuvio-desktop-windows-x64
+          path: composeApp/build/compose/release-msis/*.msi
+          if-no-files-found: error
+          retention-days: 7
