@@ -1,41 +1,105 @@
 name: Windows MSI
 
 on:
-  workflow_dispatch:
   push:
     branches: [touch-scroll]
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: Build artifacts, validate a release, create a draft, or publish
+        required: true
+        type: choice
+        options:
+          - build-only
+          - dry-run
+          - draft
+          - publish
+        default: dry-run
+      exclude_commits:
+        description: Optional comma-separated commit hashes to omit from the notes
+        required: false
+        type: string
+
+permissions:
+  contents: write
+  pull-requests: read
+
+concurrency:
+  group: desktop-release-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
-  msi:
-    runs-on: windows-latest
+  metadata:
+    name: ${{ inputs.mode }} Windows desktop release
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.release.outputs.version }}
+      tag: ${{ steps.release.outputs.version }}
+      release_commit: ${{ steps.release.outputs.release_commit }}
+      current_bump: ${{ steps.release.outputs.current_bump }}
+      previous_bump: ${{ steps.release.outputs.previous_bump }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+
     steps:
-      - uses: actions/checkout@v4
+      - name: Check out full history
+        uses: actions/checkout@v6
         with:
-          submodules: true
-          lfs: true
+          fetch-depth: 0
 
-      - uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: '21'
-          cache: gradle
+      - name: Read release metadata
+        id: release
+        env:
+          VERSION_FILE: composeApp/Configuration/DesktopVersion.properties
+          VERSION_KEY: VERSION_NAME
+          VERSION_FIRST_PARENT: "true"
+        run: ./scripts/release-metadata.sh "${GITHUB_SHA}" >> "${GITHUB_OUTPUT}"
 
-      - name: Make sure WiX 3 is on PATH
-        shell: pwsh
+      - name: Validate release state
+        env:
+          RELEASE_TAG: ${{ steps.release.outputs.version }}
+          CURRENT_BUMP: ${{ steps.release.outputs.current_bump }}
+          RELEASE_COMMIT: ${{ steps.release.outputs.release_commit }}
+          RELEASE_REF_TYPE: ${{ github.ref_type }}
+          RELEASE_MODE: ${{ inputs.mode }}
         run: |
-          $pf = ${env:ProgramFiles(x86)}
-          $wix = Get-ChildItem $pf -Directory -Filter 'WiX Toolset*' -ErrorAction SilentlyContinue | Select-Object -First 1
-          if (-not $wix) {
-            choco install wixtoolset -y --no-progress
-            $wix = Get-ChildItem $pf -Directory -Filter 'WiX Toolset*' | Select-Object -First 1
-          }
-          Add-Content $env:GITHUB_PATH "$($wix.FullName)\bin"
+          if [[ "${RELEASE_REF_TYPE}" != "branch" ]]; then
+            echo "Releases must be dispatched from a branch, not ${RELEASE_REF_TYPE}." >&2
+            exit 1
+          fi
 
-      - name: Build MSI
-        shell: pwsh
-        run: .\gradlew.bat :composeApp:packageReleaseMsi --rerun-tasks
+          if [[ "${RELEASE_MODE}" != "build-only" ]]; then
+            if git rev-parse --verify --quiet "refs/tags/${RELEASE_TAG}"; then
+              echo "Tag ${RELEASE_TAG} already exists." >&2
+              exit 1
+            fi
+            if gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${RELEASE_TAG}" >/dev/null 2>&1; then
+              echo "A GitHub release for ${RELEASE_TAG} already exists." >&2
+              exit 1
+            fi
 
-      - uses: actions/upload-artifact@v4
-        with:
-          name: nuvio-windows-msi
-          path: composeApp/build/compose/binaries/**/*.msi
+            unexpected_changes="$(
+              git diff --name-only "${CURRENT_BUMP}..${RELEASE_COMMIT}" \
+                | grep -Ev '^(\.github/workflows/desktop-release\.yml|scripts/(generate-release-notes|release-metadata)\.sh)$' \
+                || true
+            )"
+            if [[ -n "${unexpected_changes}" ]]; then
+              echo "The desktop version bump must be the final application change before release." >&2
+              echo "Unexpected files changed after the bump:" >&2
+              echo "${unexpected_changes}" >&2
+              exit 1
+            fi
+          fi
+
+      - name: Generate repository release notes
+        if: inputs.mode != 'build-only'
+        env:
+          PREVIOUS_BUMP: ${{ steps.release.outputs.previous_bump }}
+          CURRENT_BUMP: ${{ steps.release.outputs.current_bump }}
+          EXCLUDE_COMMITS: ${{ inputs.exclude_commits }}
+        run: |
+          ./scripts/generate-release-notes.sh \
+            --from "${PREVIOUS_BUMP}" \
+            --to "${CURRENT_BUMP}" \
+            --repository "${GITHUB_REPOSITORY}" \
+            --repository-hi
